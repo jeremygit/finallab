@@ -1,0 +1,36 @@
+/*
+ * Threads.h
+ *
+ *  Created on: 1 Jun 2017
+ *      Author: 12033445
+ */
+
+#ifndef THREADS_H
+#define THREADS_H
+
+#include "OS.h"
+
+/** Common thread sizes for convenience */
+#define THREADS_STACK_SIZE_256 256
+#define THREADS_STACK_SIZE_512 512
+#define THREADS_STACK_SIZE_1024 1024
+
+typedef struct Thread
+{
+  void (*thread)(void*);
+  void *pData;
+  void *pStack;
+  uint8_t priority;
+} Thread_t;
+
+extern Thread_t Threads_Init;
+extern Thread_t Threads_Main;
+extern Thread_t Threads_RTC;
+extern Thread_t Threads_UARTRx;
+extern Thread_t Threads_UARTTx;
+extern Thread_t Threads_PIT;
+extern Thread_t Threads_AccelEvent;
+extern Thread_t Threads_AccelReadComplete;
+extern Thread_t Threads_AccelHandleI2C;
+
+#endif /* THREADS_H */

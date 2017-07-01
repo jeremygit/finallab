@@ -1,0 +1,135 @@
+/*!
+ *  @file FIFO.c
+ *
+ *  @brief Contains definitions of the private function that deals with the FIFO structure process
+ *
+ *  @author Author: Jeremy Heritage 12033445 , Victor WU (12009155)
+ *
+ *  @date Created on: 29 Mar 2017, Last updated 01 April 2017
+ *
+ *  Hardware/Software configuration required to use the module : NA
+ *
+ */
+/*!
+**  @addtogroup FIFO_module FIFO module documentation
+**  @{
+*/
+/* MODULE FIFO */
+
+#include "FIFO.h"
+#include "Cpu.h"
+
+void FIFO_Init(TFIFO * const FIFO)
+{
+  // Initialize an empty FIFO
+  // FIFO->NbBytes = 0;
+  FIFO->Start = 0;
+  FIFO->End = 0;
+  FIFO->BytesFreeSemaphore = OS_SemaphoreCreate(FIFO_SIZE);
+  FIFO->BytesUsedSemaphore = OS_SemaphoreCreate(0);
+}
+
+void FIFO_Put(TFIFO * const FIFO, const uint8_t data)
+{
+  //OS_ERROR error =
+  (void)OS_SemaphoreWait(FIFO->BytesFreeSemaphore, 0);
+
+  OS_DisableInterrupts(); //access
+
+  // When not full, put the data in the 'end' index position (the first data to be retrieved).
+  FIFO->Buffer[FIFO->End] = data;
+
+  // Move the end position index as to contiguously place the next byte that comes in.
+  FIFO->End = (FIFO->End + 1) % FIFO_SIZE;
+
+  OS_EnableInterrupts(); //access
+
+  OS_SemaphoreSignal(FIFO->BytesUsedSemaphore);
+}
+
+void FIFO_Get(TFIFO * const FIFO, uint8_t * const dataPtr)
+{
+  (void)OS_SemaphoreWait(FIFO->BytesUsedSemaphore, 0);
+
+  // Stop other ISR to start other threads
+  // Reentracy, from another calling thread
+  OS_DisableInterrupts(); //access
+
+  // Get the value of the byte at oldest position.
+  *dataPtr = FIFO->Buffer[FIFO->Start];
+
+  // Move the start position index as to take data from the following positon in the buffer next time.
+  FIFO->Start = (FIFO->Start + 1) % FIFO_SIZE;
+
+  OS_EnableInterrupts(); //access
+
+  OS_SemaphoreSignal(FIFO->BytesFreeSemaphore);
+}
+
+
+
+/* FIFO up til Lab4
+bool FIFO_Put(TFIFO * const FIFO, const uint8_t data)
+{
+  EnterCritical();
+  // Check whether the FIFO is full.
+  if (FIFO->NbBytes == FIFO_SIZE)
+  {
+    // Return early if Buffer is full, thus not adding the data to the Buffer.
+    ExitCritical();
+    return 0;
+  }
+
+  // When not full, put the data in the 'end' index position (the first data to be retrieved).
+  FIFO->Buffer[FIFO->End] = data;
+
+  // The amount of data in the buffer, increases every time a new byte of data is added to the Buffer.
+  FIFO->NbBytes++;
+
+  // Move the end position index as to contiguously place the next byte that comes in.
+  FIFO->End = (FIFO->End + 1) % FIFO_SIZE;
+
+  // Data successfully placed in buffer
+
+  ExitCritical();
+  return 1;
+}
+
+bool FIFO_Get(TFIFO * const FIFO, uint8_t * const dataPtr)
+{
+
+  EnterCritical();
+  // Check whether the FIFO is empty.
+  if (FIFO->NbBytes == 0)
+  {
+    // Return early if empty, data cannot be provided.
+    ExitCritical();
+    return 0;
+  }
+
+  // Get the value of the byte at oldest position.
+  *dataPtr = FIFO->Buffer[FIFO->Start];
+
+  // Decrement the number of bytes in the buffer, as a byte data has been taken out of the buffer.
+  FIFO->NbBytes--;
+
+  // Move the start position index as to take data from the following positon in the buffer next time.
+  FIFO->Start = (FIFO->Start + 1) % FIFO_SIZE;
+
+  ExitCritical();
+  // Data was retrieved from buffer.
+  return 1;
+}
+*/
+
+
+//  FIFO-Start++
+//  if (FIFO-Start == FIFO_SIZE)
+//  {
+//    FIFO->Start = 0;
+//  }
+
+/*!
+** @}
+*/
+

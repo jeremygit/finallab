@@ -1,0 +1,77 @@
+/*
+ * Threads.c
+ *
+ *  Created on: 1 Jun 2017
+ *      Author: 12033445
+ */
+
+// To use NULL instead of 0
+#include <stddef.h>
+#include "OS.h"
+#include "Threads.h"
+
+#include "RTC.h"
+#include "UART.h"
+
+typedef enum ThreadPriority
+{
+  THREAD_PRIORITY_INIT,
+  THREAD_PRIORITY_UARTRX,
+  THREAD_PRIORITY_UARTTX,
+  THREAD_PRIORITY_RTC,
+  THREAD_PRIORITY_MAIN,
+} ThreadPriority_t;
+
+/** Init Thread Config */
+OS_THREAD_STACK(ThreadStackInit, THREADS_STACK_SIZE_1024);
+
+Thread_t Threads_Init = {
+  NULL, //define in main
+  NULL,
+  &ThreadStackInit[THREADS_STACK_SIZE_1024 - 1],
+  THREAD_PRIORITY_INIT
+};
+
+/** UART Rx Thread Config */
+OS_THREAD_STACK(ThreadStackUARTRx, THREADS_STACK_SIZE_1024);
+
+Thread_t Threads_UARTRx =
+{
+  .thread = UART_RxThread,
+  .pData = NULL,
+  .pStack = &ThreadStackUARTRx[THREADS_STACK_SIZE_1024 - 1],
+  .priority = THREAD_PRIORITY_UARTRX
+};
+
+/** UART Tx Thread Config */
+OS_THREAD_STACK(ThreadStackUARTTx, THREADS_STACK_SIZE_1024);
+
+Thread_t Threads_UARTTx =
+{
+  .thread = UART_TxThread,
+  .pData = NULL,
+  .pStack = &ThreadStackUARTTx[THREADS_STACK_SIZE_1024 - 1],
+  .priority = THREAD_PRIORITY_UARTTX
+};
+
+/** RTC Thread Config */
+OS_THREAD_STACK(ThreadStackRTC, THREADS_STACK_SIZE_1024);
+
+Thread_t Threads_RTC =
+{
+  .thread = RTC_Thread_Sec,
+  .pData = NULL,
+  .pStack = &ThreadStackRTC[THREADS_STACK_SIZE_1024 - 1],
+  .priority = THREAD_PRIORITY_RTC
+};
+
+/** Main Thread Config */
+OS_THREAD_STACK(ThreadStackMain, THREADS_STACK_SIZE_1024);
+
+Thread_t Threads_Main =
+{
+  .thread = NULL, //define in main
+  .pData = NULL,
+  .pStack = &ThreadStackMain[THREADS_STACK_SIZE_1024 - 1],
+  .priority = THREAD_PRIORITY_MAIN
+};

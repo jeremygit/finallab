@@ -1,0 +1,105 @@
+/*!
+ *  @file PIT.c
+ *
+ *  @brief A PIT implementation that supports the call of a user-defined function at each timer interrupt.
+ *
+ *  @date Created on: 3 May 2017
+ *
+ *  @author Author: Jeremy Heritage 12033445 , Victor WU (12009155)
+ */
+
+/*!
+**  @addtogroup PIT_module PIT module documentation
+**  @{
+*/
+/* MODULE PIT */
+
+
+#include "PIT.h"
+// Information regarding the memory map for MK70F12 processor.
+#include "MK70F12.h"
+// New non-standard types
+#include "types.h"
+
+// Store user-provided module clock frequency
+static uint32_t ModuleClockHz;
+// Store user-provided callback funciton and arguments
+static void (*UserFunction)(void*);
+static void *UserArguments;
+
+// PIT Channel 0 Interrupt
+// IRQ 68 : 68 mod 32 = 4
+// Non-IPR 2
+// IPR 17
+
+bool PIT_Init(const uint32_t moduleClk, void (*userFunction)(void*), void* userArguments)
+{
+  // Enable Device
+  SIM_SCGC6 |= SIM_SCGC6_PIT_MASK;
+
+  PIT_MCR = 0;
+  // Debug Freeze
+  PIT_MCR |= PIT_MCR_FRZ_MASK;
+
+  // Enable module interrupts
+  PIT_TCTRL0 |= PIT_TCTRL_TIE_MASK;
+
+  // Clear Pending
+  NVICICPR2 = (1 << 4);
+  // Enable Interrupts
+  NVICISER2 = (1 << 4);
+
+  // Initialize module parameters
+  ModuleClockHz = moduleClk;
+  UserFunction = userFunction;
+  UserArguments = userArguments;
+}
+
+void PIT_Set(const uint32_t period, const bool restart)
+{
+  //double moduleNs = 1000000000 / (double) ModuleClockHz;
+  //double calc = ((double)period) / moduleNs;
+
+  /*	Clock-cycles-per-second multiplied by Period nanoseconds-converted-to-seconds...
+   * 	e.g.
+   *  	period * 0.000000001 / (1 / ModuleClockHz)
+   *  	equivalent to: period * 0.000000001 * ModuleClockHz
+   */
+  uint32_t countFrom = (double)(ModuleClockHz * (period * 0.000000001));
+
+  if (restart)
+  {
+    // Disable timer
+    PIT_Enable(false);
+  }
+
+  // Load start-from value
+  PIT_LDVAL0 = countFrom - 1;
+
+  // Enable or re-enable (i.e. nothing if PIT was never disabled)
+  PIT_Enable(true);
+}
+
+void PIT_Enable(const bool enable)
+{
+  if (enable)
+  {
+      PIT_TCTRL0 |= PIT_TCTRL_TEN_MASK;
+  } else {
+      PIT_TCTRL0 &= ~PIT_TCTRL_TEN_MASK;
+  }
+}
+
+void __attribute__ ((interrupt)) PIT_ISR(void)
+{
+  PIT_TFLG0 = PIT_TFLG_TIF_MASK; //clear flag
+  if (UserFunction)
+  {
+    (*UserFunction)(UserArguments); //perform callback
+  }
+}
+
+
+/*!
+** @}
+*/

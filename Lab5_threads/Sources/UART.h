@@ -1,0 +1,75 @@
+/*!
+ *  @file UART.h
+ *
+ *  Header file for UART.c
+ *
+ *  @brief I/O routines for UART communications on the TWR-K70F120M.
+ *  This contains the functions for operating the UART (serial port).
+ *  Definitions of the private UART functions
+ *
+ *  @author Author: Jeremy 12033445 , Victor WU (12009155)
+ *
+ *  @date Created on: 29 Mar 2017, Last updated 01 April 2017
+ *
+ *  Hardware/Software configuration required to use the module : NA
+ */
+
+/*!
+**  @addtogroup UART_module UART module documentation
+**  @{
+*/
+/* MODULE UART */
+
+
+#ifndef UART_H
+#define UART_H
+
+// new types
+#include "types.h"
+
+/*! @brief Sets up the UART interface before first use.
+ *
+ *  @param baudRate The desired baud rate in bits/sec.
+ *  @param moduleClk The module clock rate in Hz
+ *  @return bool - TRUE if the UART was successfully initialized.
+ */
+bool UART_Init(const uint32_t baudRate, const uint32_t moduleClk);
+ 
+/*! @brief Get a character from the receive FIFO if it is not empty.
+ *
+ *  @param dataPtr A pointer to memory to store the retrieved byte.
+ *  @return bool - TRUE if the receive FIFO returned a character.
+ *  @note Assumes that UART_Init has been called.
+ */
+void UART_InChar(uint8_t * const dataPtr);
+ 
+/*! @brief Put a byte in the transmit FIFO if it is not full.
+ *
+ *  @param data The byte to be placed in the transmit FIFO.
+ *  @return bool - TRUE if the data was placed in the transmit FIFO.
+ *  @note Assumes that UART_Init has been called.
+ */
+void UART_OutChar(const uint8_t data);
+
+/*! @brief Poll the UART status register to try and receive and/or transmit one character.
+ *  @return void
+ *  @note Assumes that UART_Init has been called.
+ */
+void UART_Poll(void);
+
+/*! @brief Interrupt service routine for the UART2.
+ *
+ *  @note Assumes the transmit and receive FIFOs have been initialized
+*/
+void __attribute__((interrupt)) UART2_ISR(void);
+
+/** UART Threads to handle incoming and outgoing data */
+void UART_RxThread(void *arg);
+void UART_TxThread(void *arg);
+
+#endif
+
+/*!
+** @}
+*/
+

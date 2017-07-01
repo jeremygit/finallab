@@ -1,0 +1,168 @@
+/*!
+ *  @file RTC.c
+ *  @brief A Real Time Clock implementation
+ *  @date Created on: 3 May 2017
+ *  @author Author: Jeremy Heritage 12033445 , Victor WU (12009155)
+ */
+
+/*!
+**  @addtogroup RTC_module RTC module documentation
+**  @{
+*/
+/* MODULE RTC */
+
+
+
+#include "RTC.h"
+// Information regarding the memory map for MK70F12 processor.
+#include "MK70F12.h"
+// New non-standard types
+#include "types.h"
+// RTOS
+#include "OS.h"
+
+static void (*UserFunction)(void*);
+static void *UserArguments;
+//60*60*24 = 86400 seconds in a day
+static const uint32_t SECONDS_IN_A_DAY = 86399;
+
+static OS_ECB *RTCSecSemaphore;
+
+OS_ECB *RTC_SecondsChangeSemaphore;
+
+
+bool RTC_Init(void (*userFunction)(void*), void* userArguments)
+{
+
+  RTC_SecondsChangeSemaphore = OS_SemaphoreCreate(0);
+
+  UserFunction = userFunction;
+  UserArguments = userArguments;
+
+  //Set up gate control for RTC
+  SIM_SCGC6 |= SIM_SCGC6_RTC_MASK;
+
+  //Enable writing and unlock the RTC registers
+  //TODO Do we need to worry about these registers? Set others to zero
+
+  //In case of the reset of the tower --> TIF flag is set due to reset
+  if (RTC_SR & RTC_SR_TIF_MASK)
+    {
+      RTC_SR &= ~RTC_SR_TCE_MASK; //disabling RTC counter
+      RTC_TSR = RTC_TTSR; //copy the time data from tamper time seconds register
+    }
+
+  //disable counter for initialization and setup
+  RTC_SR &= ~RTC_SR_TCE_MASK;
+  //Selection of the load capacitance for the crystal oscillator - 16pF + 2pF = 18pF
+  //first &= is to clear all other bit in the register
+  RTC_LR |= RTC_LR_CRL_MASK; //Unlocking Control Register
+  RTC_CR &= ~RTC_CR_SC8P_MASK;
+  RTC_CR &= ~RTC_CR_SC4P_MASK;
+  RTC_CR |= RTC_CR_SC2P_MASK; //2pF
+  RTC_CR |= RTC_CR_SC16P_MASK; //16pF
+  RTC_LR &= ~RTC_LR_CRL_MASK; //locking Control Register
+  RTC_CR |= RTC_CR_OSCE_MASK; //oscillator enable
+
+
+  //enable interrupts
+  //Timer alarm interrupt enabled - used to compare with TSR and generates interrupt
+  RTC_IER |= RTC_IER_TAIE_MASK;
+  //once TSR matches the TAR register, interrupt is generated and reverts TSR back to 0
+  //60*60*24 = 86400 seconds in a day
+  RTC_TAR = SECONDS_IN_A_DAY;
+  //Timer seconds interrupt enabled
+  RTC_IER |= RTC_IER_TSIE_MASK;
+
+  //Enable counter and incrementation
+  RTC_SR |= RTC_SR_TCE_MASK;
+
+  //clear any pending interrupts in RTC
+  NVICICPR2 = (1 << 3);
+  //Enable interrupts from the RTC module
+  NVICISER2 = (1 << 3);
+
+  return true;
+}
+
+void RTC_Set(const uint8_t hours, const uint8_t minutes, const uint8_t seconds)
+{
+  static uint32_t timedata  = 0;
+  timedata = (hours * 3600) + (minutes * 60) + (seconds);
+  //disable counter to write into TSR register
+  RTC_SR &= ~RTC_SR_TCE_MASK;
+  //write value in TSR
+  RTC_TSR = (timedata);
+  //Enable counting again
+  RTC_SR |= RTC_SR_TCE_MASK;
+}
+
+void RTC_Get(uint8_t* const hours, uint8_t* const minutes, uint8_t* const seconds)
+{
+  static uint32_t timerawdata = 0;
+  //read the raw time data from register
+  timerawdata = RTC_TSR;
+  *hours = timerawdata /(60*60);
+  *minutes = (timerawdata % 3600)/60;
+  *seconds = (timerawdata % 3600) % 60;
+}
+
+bool RTC_IsValidTime(const uint8_t hours, const uint8_t minutes, const uint8_t seconds)
+{
+  return (hours <= 23 && minutes <= 59 && seconds <= 59);
+}
+
+// Old Private Thread - NOT IN USE
+void RTC_Thread_Sec(void *arg)
+{
+  OS_ERROR error;
+  for (;;)
+  {
+
+    (void)OS_SemaphoreWait(RTCSecSemaphore, 0);
+    if (UserFunction) {
+	(*UserFunction)(UserArguments); //pass function by reference to enable LED
+    }
+  }
+}
+
+void __attribute__ ((interrupt)) RTC_ISR_SEC(void)
+{
+  OS_ISREnter();
+  (void)OS_SemaphoreSignal(RTC_SecondsChangeSemaphore);
+  OS_ISRExit();
+}
+
+/*
+// ISR up to Lab4
+void __attribute__ ((interrupt)) RTC_ISR_SEC(void)
+{
+  if (UserFunction) {
+      (*UserFunction)(UserArguments); //pass function by reference to enable LED
+  }
+}
+*/
+
+/*!
+ * This interrupt is to reset the clock back to zero once 24hrs has passed
+ */
+void __attribute__ ((interrupt)) RTC_ISR_OF(void)
+{
+   //Disable counter
+   RTC_SR |= ~RTC_SR_TCE_MASK;
+   //once TSR matches the TAR register, interrupt is generated and reverts TSR back to 0
+   //clears the interrupt flag of time alarm
+   RTC_TAR = SECONDS_IN_A_DAY;
+   //Timer alarm interrupt enabled - used to compare with TSR and generates interrupt
+   RTC_IER |= RTC_IER_TAIE_MASK;
+   //Reset the seconds register back to 0 once 24hrs have been passed
+   RTC_TSR = 0;
+   //renable the clock
+   RTC_SR |= RTC_SR_TCE_MASK;
+}
+
+/*!
+** @}
+*/
+
+

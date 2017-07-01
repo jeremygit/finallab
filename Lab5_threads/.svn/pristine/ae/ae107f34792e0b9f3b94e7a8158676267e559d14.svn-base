@@ -1,0 +1,144 @@
+/*!
+ * @file Threads.c
+ *
+ *  @brief A module to aggregate and manage the Threads for the RTOS
+ *
+ *  @author Author: Jeremy Heritage 12033445 , Victor WU (12009155)
+ *
+ *  @date Created on: 1 Jun 2017, Last updated 7 Jun 2017
+ */
+
+// To use NULL instead of 0
+#include <stddef.h>
+#include "OS.h"
+#include "Threads.h"
+
+// Aggregate tower modules
+#include "RTC.h"
+#include "UART.h"
+#include "PIT.h"
+#include "accel.h"
+
+// Manage priorities...
+typedef enum ThreadPriority
+{
+  THREAD_PRIORITY_INIT, // Don't touch this one!
+  THREAD_PRIORITY_RTC,
+  THREAD_PRIORITY_FTM_CH0_OUTPUT,
+  THREAD_PRIORITY_UARTRX,
+  THREAD_PRIORITY_UARTTX,
+  THREAD_PRIORITY_ACCEL_HANDLE_I2C,
+  THREAD_PRIORITY_ACCEL_READ_COMPLETE,
+  THREAD_PRIORITY_ACCEL_EVENT,
+  THREAD_PRIORITY_PIT,
+  THREAD_PRIORITY_MAIN,
+} ThreadPriority_t;
+
+/** Init Thread Config */
+OS_THREAD_STACK(ThreadStackInit, THREADS_STACK_SIZE_SML);
+
+Thread_t Threads_Init = {
+  NULL, //define in main
+  NULL,
+  &ThreadStackInit[THREADS_STACK_SIZE_SML - 1],
+  THREAD_PRIORITY_INIT
+};
+
+/** UART Rx Thread Config */
+OS_THREAD_STACK(ThreadStackUARTRx, THREADS_STACK_SIZE_SML);
+
+Thread_t Threads_UARTRx =
+{
+  .thread = UART_RxThread,
+  .pData = NULL,
+  .pStack = &ThreadStackUARTRx[THREADS_STACK_SIZE_SML - 1],
+  .priority = THREAD_PRIORITY_UARTRX
+};
+
+/** UART Tx Thread Config */
+OS_THREAD_STACK(ThreadStackUARTTx, THREADS_STACK_SIZE_SML);
+
+Thread_t Threads_UARTTx =
+{
+  .thread = UART_TxThread,
+  .pData = NULL,
+  .pStack = &ThreadStackUARTTx[THREADS_STACK_SIZE_SML - 1],
+  .priority = THREAD_PRIORITY_UARTTX
+};
+
+/** RTC Thread Config */
+OS_THREAD_STACK(ThreadStackRTC, THREADS_STACK_SIZE_SML);
+
+Thread_t Threads_RTC =
+{
+  .thread = NULL,
+  .pData = NULL,
+  .pStack = &ThreadStackRTC[THREADS_STACK_SIZE_SML - 1],
+  .priority = THREAD_PRIORITY_RTC
+};
+
+/** PIT Thread Config */
+OS_THREAD_STACK(ThreadStackPIT, THREADS_STACK_SIZE_SML);
+
+Thread_t Threads_PIT =
+{
+  .thread = NULL, //define in main
+  .pData = NULL,
+  .pStack = &ThreadStackPIT[THREADS_STACK_SIZE_SML - 1],
+  .priority = THREAD_PRIORITY_PIT
+};
+
+/** Accel Event Thread Config */
+OS_THREAD_STACK(ThreadStackAccelEvent, THREADS_STACK_SIZE_SML);
+
+Thread_t Threads_AccelEvent =
+{
+  .thread = NULL, //define in main
+  .pData = NULL,
+  .pStack = &ThreadStackAccelEvent[THREADS_STACK_SIZE_SML - 1],
+  .priority = THREAD_PRIORITY_ACCEL_EVENT
+};
+
+/** Accel Read Complete Thread Config */
+OS_THREAD_STACK(ThreadStackAccelReadComplete, THREADS_STACK_SIZE_SML);
+
+Thread_t Threads_AccelReadComplete =
+{
+  .thread = NULL, //define in main
+  .pData = NULL,
+  .pStack = &ThreadStackAccelReadComplete[THREADS_STACK_SIZE_SML - 1],
+  .priority = THREAD_PRIORITY_ACCEL_READ_COMPLETE
+};
+
+/** Accel Handle I2C Thread Config */
+OS_THREAD_STACK(ThreadStackAccelHandleI2C, THREADS_STACK_SIZE_SML);
+
+Thread_t Threads_AccelHandleI2C =
+{
+  .thread = Accel_HandleI2CThread,
+  .pData = NULL,
+  .pStack = &ThreadStackAccelHandleI2C[THREADS_STACK_SIZE_SML - 1],
+  .priority = THREAD_PRIORITY_ACCEL_HANDLE_I2C
+};
+
+/** FTM Channel 0 Config */
+OS_THREAD_STACK(ThreadStackFTMChannel0Output, THREADS_STACK_SIZE_SML);
+
+Thread_t Threads_FTMChannel0OutputEvent =
+{
+  .thread = NULL, //define in main
+  .pData = 0, //channel Nb
+  .pStack = &ThreadStackFTMChannel0Output[THREADS_STACK_SIZE_SML - 1],
+  .priority = THREAD_PRIORITY_FTM_CH0_OUTPUT
+};
+
+/** Main Thread Config */
+OS_THREAD_STACK(ThreadStackMain, THREADS_STACK_SIZE_SML);
+
+Thread_t Threads_Main =
+{
+  .thread = NULL, //define in main
+  .pData = NULL,
+  .pStack = &ThreadStackMain[THREADS_STACK_SIZE_SML - 1],
+  .priority = THREAD_PRIORITY_MAIN
+};

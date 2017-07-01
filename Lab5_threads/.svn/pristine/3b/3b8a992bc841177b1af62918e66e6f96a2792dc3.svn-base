@@ -1,0 +1,368 @@
+/*
+ * I2C.c
+ *
+ *  Created on: 22 May 2017
+ *      Author: 12033445
+ */
+
+#include "I2C.h"
+// Information regarding the memory map for MK70F12 processor.
+#include "MK70F12.h"
+
+#define SCL_SIZE 64;
+#define MULT_SIZE 3;
+
+#define RX_SECOND_LAST_BYTE 1
+#define RX_LAST_BYTE 0
+
+static uint8_t SlaveAddress;
+
+static uint8_t *ReadDataPtr;
+
+static uint8_t ReadDataNbBytesRemaining;
+
+static void (*UserReadCompleteCallbackFunction)(void *args);
+static void *UserReadCompleteCallbackArguments;
+
+static OS_ECB *I2CNotInUseSemaphore;
+
+OS_ECB *I2C_ReadCompleteSemaphore;
+
+
+/*
+static const uint16_t SCL_DIVIDERS[SCL_SIZE] = {
+    20, 22, 24, 26, 28, 30, 34, 40, 28, 32, 36, 40, 44, 48, 56, 68,
+    48, 56, 64, 72, 80, 88, 104, 128, 80, 96, 112, 128, 144, 160, 192, 240,
+    160, 192, 224, 256, 288, 320, 384, 480, 320, 384, 448, 512, 576, 640, 768, 960,
+    640, 768, 896, 1024, 1152, 1280, 1536, 1920, 1280, 1536, 1792, 2048, 2304, 2560, 3072, 3840
+};
+
+static const uint8_t MULT[MULT_SIZE] = {1,2,4};
+
+void FindMultAndSCL(uint32_t moduleClk, uint32_t targetBaudRate, uint8_t *mult, uint16_t *scl)
+{
+  uint8_t mulCount = 0;
+  uint8_t sclCount = 0;
+  uint8_t foundMul = 0;
+  uint8_t foundICR = 0;
+  uint16_t foundSCL = 0;
+  uint32_t i2cBaudCalc = 0;
+  uint32_t i2cBaudCalcMaxFound = 0;
+
+  while(MULT[mulCount])
+  {
+    while(SCL_DIVIDERS[sclCount])
+    {
+      i2cBaudCalc = moduleClk / (MULT[mulCount] * SCL_DIVIDERS[sclCount]);
+      if (i2cBaudCalc <= targetBaudRate)
+      {
+	if (i2cBaudCalc > i2cBaudCalcMaxFound)
+	{
+	 foundMul = mulCount;
+	 foundICR = sclCount;
+	 foundSCL = SCL_DIVIDERS[sclCount];
+	 i2cBaudCalcMaxFound = i2cBaudCalc;
+	}
+      }
+      sclCount++;
+    }
+    mulCount++;
+  }
+  *mult = foundMul;
+  *scl = foundICR;
+
+}
+*/
+
+bool I2C_Init(const TI2CModule* const aI2CModule, const uint32_t moduleClk)
+{
+
+  I2C_ReadCompleteSemaphore = OS_SemaphoreCreate(0);
+  I2CNotInUseSemaphore = OS_SemaphoreCreate(1);
+
+  UserReadCompleteCallbackFunction = aI2CModule->readCompleteCallbackFunction;
+  UserReadCompleteCallbackArguments = aI2CModule->readCompleteCallbackArguments;
+
+  // TODO
+  // Function to get get mul and SCL here
+  // aI2CModule->baudRate;
+  // moduleClk
+
+  // Enable PORTE
+  SIM_SCGC5 |= SIM_SCGC5_PORTE_MASK;
+  // Configure I2C SCL / SDA PORTE
+  PORTE_PCR18 = PORT_PCR_MUX(4) | PORT_PCR_ODE_MASK;
+  PORTE_PCR19 = PORT_PCR_MUX(4) | PORT_PCR_ODE_MASK;
+
+  // Enable I2C Module, itself
+  SIM_SCGC4 |= SIM_SCGC4_IIC0_MASK;
+
+  //Disable the I2C
+  I2C0_C1 &= ~I2C_C1_IICEN_MASK;
+
+  // Clear interrupts
+  I2C0_S = I2C_S_IICIF_MASK;
+  // I2C MUL and SCL
+  I2C0_F = I2C_F_MULT(0x01) | I2C_F_ICR(0x23);
+  // Clear control register 2
+  I2C0_C2 = 0;
+  // No glitch filter
+  I2C0_FLT = 0;
+
+  //Enable the I2C
+  I2C0_C1 |= I2C_C1_IICEN_MASK;
+
+  // Clear pending interrupts
+  NVICICPR0 = (1 << 24);
+  // Enable Interrupts
+  NVICISER0 = (1 << 24);
+
+  // NOTE
+  // Interrupts are armed when an IntRead is initiated
+  // and disarmed when there are no ore bytes to read
+  // via the ISR
+
+  I2C_SelectSlaveDevice(aI2CModule->primarySlaveAddress);
+
+}
+
+void I2C_Write(const uint8_t registerAddress, const uint8_t data)
+{
+
+  OS_SemaphoreWait(I2CNotInUseSemaphore, 0);
+  // Suspend while busy
+  while((I2C0_S & I2C_S_BUSY_MASK) == I2C_S_BUSY_MASK);
+
+
+  // Start command
+  I2C0_C1 |= I2C_C1_TX_MASK;
+  I2C0_C1 |= I2C_C1_MST_MASK;
+
+  // Send the device address to dataline, with the writeByte = 0
+  I2C0_D = (SlaveAddress << 1);
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+  // Specify the register we want to write to
+  I2C0_D = registerAddress;
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+  // Put the register data to the dataline
+  I2C0_D = data;
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+  // Send stop
+  I2C0_C1 &= ~I2C_C1_MST_MASK;
+  I2C0_C1 &= ~I2C_C1_TX_MASK;
+
+  OS_SemaphoreSignal(I2CNotInUseSemaphore);
+}
+
+void I2C_PollRead(const uint8_t registerAddress, uint8_t* const data, const uint8_t nbBytes)
+{
+  // Suspend while busy
+  while((I2C0_S & I2C_S_BUSY_MASK) == I2C_S_BUSY_MASK);
+
+  ReadDataPtr = data;
+
+  ReadDataNbBytesRemaining = nbBytes;
+
+  // Start command
+  I2C0_C1 |= I2C_C1_TX_MASK;
+  I2C0_C1 |= I2C_C1_MST_MASK;
+
+  // Send the device address to dataline, with the writeByte = 0
+  I2C0_D = (SlaveAddress << 1);
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+  // Specify the register we want to access
+  I2C0_D = registerAddress;
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+  // Repeated start
+  I2C0_C1 |= I2C_C1_RSTA_MASK;
+
+  // Send the device address to dataline, with the writeByte = 1, for a READ!
+  I2C0_D = (SlaveAddress << 1) | 1;
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+  // Change to Receive mode, to read/receive data
+  I2C0_C1 &= ~I2C_C1_TX_MASK;
+  // if 1 Byte
+  // Nak some where for single byte read\
+
+  // AK
+  I2C0_C1 &= ~I2C_C1_TXAK_MASK;
+
+  // Dummy ready, invoke reading on the data line
+  *ReadDataPtr = I2C0_D;
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+
+  // -------- The Read Process -----------
+  // TODO Implement the 'While loop'
+  // with whats implemented in the ISR function
+
+  // Read X_OUT
+  *ReadDataPtr = I2C0_D;
+  ReadDataPtr++;
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+  // 2nd Last Byte
+  // Set TXACK
+  I2C0_C1 |= I2C_C1_TXAK_MASK;
+
+  // Read Y_OUT
+  *ReadDataPtr = I2C0_D;
+  ReadDataPtr++;
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+  // Last byte to read
+  // Stop and back to idle...
+  I2C0_C1 &= ~I2C_C1_MST_MASK;
+  I2C0_C1 &= ~I2C_C1_TX_MASK;
+  // Read Z_OUT
+  *ReadDataPtr = I2C0_D;
+
+}
+
+void I2C_SelectSlaveDevice(const uint8_t slaveAddress)
+{
+  SlaveAddress = slaveAddress;
+}
+
+void I2C_IntRead(const uint8_t registerAddress, uint8_t* const data, const uint8_t nbBytes)
+{
+  // Suspend while busy
+  while((I2C0_S & I2C_S_BUSY_MASK) == I2C_S_BUSY_MASK);
+
+  ReadDataPtr = data;
+
+  ReadDataNbBytesRemaining = nbBytes;
+
+  // Start command
+  I2C0_C1 |= I2C_C1_TX_MASK;
+  I2C0_C1 |= I2C_C1_MST_MASK;
+
+  // Send the device address to dataline, with the writeByte = 0
+  I2C0_D = (SlaveAddress << 1);
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+  // Specify the register we want to access
+  I2C0_D = registerAddress;
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+  // Repeated start
+  I2C0_C1 |= I2C_C1_RSTA_MASK;
+
+  // Send the device address to dataline, with the writeByte = 1, for a READ!
+  I2C0_D = (SlaveAddress << 1) | 1;
+
+  // Wait for AK
+  while((I2C0_S & I2C_S_IICIF_MASK) == 0) {}
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+
+
+  // Arm interrupts on I2C Module
+  I2C0_C1 |= I2C_C1_IICIE_MASK;
+
+
+
+  // Change to Receive mode, to read/receive data
+  I2C0_C1 &= ~I2C_C1_TX_MASK;
+  // AK
+  I2C0_C1 &= ~I2C_C1_TXAK_MASK;
+
+
+  // Dummy ready, invoke reading on the data line
+  *ReadDataPtr = I2C0_D;
+
+
+}
+
+
+void __attribute__ ((interrupt)) I2C_ISR(void)
+{
+  OS_ISREnter();
+  // Straight up, clear the flag on any interrupt
+  I2C0_S |= I2C_S_IICIF_MASK;
+
+  // Handle the transfer complete interrupt
+  if (I2C0_S & I2C_S_TCF_MASK)
+  {
+    // We are still in receive (RX) mode...?
+    // TODO fix this logic? I2C0_C1 & I2C_C1_TX_MASK != I2C_C1_TX_MASK
+    if (1)
+    {
+
+      ReadDataNbBytesRemaining--;
+
+      switch (ReadDataNbBytesRemaining)
+      {
+	case RX_SECOND_LAST_BYTE:
+	  // Nak
+
+	  I2C0_C1 |= I2C_C1_TXAK_MASK;
+	  break;
+	case RX_LAST_BYTE:
+	  // Stop
+	  I2C0_C1 &= ~I2C_C1_MST_MASK;
+	  I2C0_C1 &= ~I2C_C1_TX_MASK;
+	  break;
+      }
+
+      *ReadDataPtr = I2C0_D;
+      ReadDataPtr++;
+
+      // No more data receive
+      if (!ReadDataNbBytesRemaining)
+      {
+
+	// Disarm interrupts on I2C Module
+	I2C0_C1 &= ~I2C_C1_IICIE_MASK;
+
+	OS_SemaphoreSignal(I2C_ReadCompleteSemaphore);
+
+	/*
+	if (UserReadCompleteCallbackFunction)
+	{
+	  (*UserReadCompleteCallbackFunction)(UserReadCompleteCallbackArguments);
+	}
+	*/
+      }
+
+    }
+  }
+
+  OS_ISRExit();
+}

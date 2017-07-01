@@ -1,0 +1,234 @@
+/*!
+ *  @file FTM.c
+ *  @brief A HAL for the FlexTimer Module supporting only Output Compare Mode
+ *  @date Created on: 3 May 2017
+ *  @author Author: Jeremy Heritage 12033445 , Victor WU (12009155)
+ */
+
+/*!
+ *  @addtogroup FlexTimer_module FlexTimer module documentation
+ *  @{
+*/
+/* MODULE FlexTimer */
+
+#include "FTM.h"
+// Information regarding the memory map for MK70F12 processor.
+#include "MK70F12.h"
+// New non-standard types
+#include "types.h"
+// Included mainly to use the fixed frequency clock value
+#include "CPU.h"
+
+//Number of channels provided by the FTM module.
+#define FTM_CHANNELS_SIZE 8
+
+// Method to conveniently find out what MSB:MSA bits are set to (timer function) for a channel...
+#define CHANNEL_TIMER_FUNCTION(channelNb) ((FTM0_CnSC(channelNb) & (FTM_CnSC_MSB_MASK | FTM_CnSC_MSA_MASK)) >> FTM_CnSC_MSA_SHIFT)
+// Method to conveniently find out what ELSB:ELSA bits are set to (the ouput action) for a given channel.
+#define CHANNEL_OUTPUT_ACTION(channelNb) ((FTM0_CnSC(channelNb) & (FTM_CnSC_ELSB_MASK | FTM_CnSC_ELSA_MASK)) >> FTM_CnSC_ELSA_SHIFT)
+
+/** Enumerated values corresponding to FTM CLKS register */
+typedef enum
+{
+  TIMER_NO_CLOCK,
+  TIMER_SYSTEM_CLOCK,
+  TIMER_FIXED_FREQUENCY_CLOCK,
+  TIMER_EXTERNAL_CLOCK
+} TTimerClockSource;
+
+/** Data structures to store both a callback function and it's arguments for a given channel... */
+typedef struct
+{
+  void (*userFunction)(void*);	/*!< User-defined callback function per channel */
+  void *userArguments;		/*!< User-defined arguments for associated callback */
+} TTimerUserCallback;
+
+static TTimerUserCallback UserCallbacks[FTM_CHANNELS_SIZE];
+
+OS_ECB* FTM_ChannelOutputEventSemaphores[FTM_CHANNELS_SIZE];
+
+/*! @brief Evaluates whether a number is in the range of FTM channels 0-7.
+ * 	A user might provide this to setup or start a timer on a channel.
+ *
+ *  @param channelNb is the number to check.
+ *  @return bool - TRUE if the number was a number from 0 to 7 (8 channels of FTM).
+ */
+bool IsValidChannelNumber(const uint8_t channelNb);
+
+/*! @brief Clear the properties of channel such as CnSC and callback parameters.
+ *
+ *  @param channelNb is FTM0 channel to unset/clear (0 - 8).
+ *  @return bool - TRUE if channel was successfully cleared.
+ */
+bool UnSetChannel(const uint32_t channelNb);
+
+
+// FTM0 Interrupt
+// IRQ 62 : 62 mod 32 = 30
+// Non-IPR 1
+// IPR 15
+
+bool FTM_Init()
+{
+  // Init all Output Compare semaphores for the FTM Channels
+  uint8_t channelSemCount;
+  for (channelSemCount = 0; channelSemCount < FTM_CHANNELS_SIZE; channelSemCount++)
+  {
+    FTM_ChannelOutputEventSemaphores[channelSemCount] = OS_SemaphoreCreate(0);
+  }
+
+  // Enable FTM Module
+  SIM_SCGC6 |= SIM_SCGC6_FTM0_MASK;
+
+  // Initially disable FTM0
+  // * CLKS = 0
+  // * CPWMNS should be 0
+  // * We are not using TOIE so it and TOF can be 0
+  FTM0_SC = 0;
+
+  // Initialize as free running timer by setting MOD 0xffff;
+  // and setting CNTIN 0
+  FTM0_MOD = FTM_MOD_MOD_MASK;
+  FTM0_CNTIN = 0;
+
+  // Select Clock
+  FTM0_SC |= FTM_SC_CLKS(TIMER_FIXED_FREQUENCY_CLOCK);
+
+  // Clear pending interrupts
+  NVICICPR1 = (1 << 30);
+  // Enable Interrupts
+  NVICISER1 = (1 << 30);
+
+  return true;
+}
+
+bool FTM_Set(const TFTMChannel* const aFTMChannel)
+{
+  uint8_t channelNb = aFTMChannel->channelNb;
+
+  // Output compare [MSB:MSA]
+  TTimerFunction timerFunction = aFTMChannel->timerFunction;
+
+  // Channel output on match action [ELSB:ELSA]
+  uint8_t ioType = *(uint8_t *)(&aFTMChannel->ioType);
+
+  // Ensure a valid channel number has been provided before
+  // attempting to setting the channel
+  if (!IsValidChannelNumber(channelNb))
+  {
+    return false;
+  }
+
+  // Now setup FTM0 channel
+
+  //TODO (not necesarry) clear all previous channel settings and flags
+  //UnSetChannel(channelNb);
+
+  // Set callback
+  UserCallbacks[channelNb] = (TTimerUserCallback){aFTMChannel->userFunction, aFTMChannel->userArguments};
+
+  // Configure the freshly cleared channel
+  FTM0_CnSC(channelNb) |= (timerFunction << FTM_CnSC_MSA_SHIFT);
+  FTM0_CnSC(channelNb) |= (ioType << FTM_CnSC_ELSA_SHIFT);
+
+  // Enable interrupts on channel
+  FTM0_CnSC(channelNb) |= FTM_CnSC_CHIE_MASK;
+
+  return true;
+}
+
+
+bool UnSetChannel(const uint32_t channelNb)
+{
+  if (!IsValidChannelNumber(channelNb))
+  {
+    return false;
+  }
+  // Clear CnSC settings
+  FTM0_CnSC(channelNb) = 0;
+  UserCallbacks[channelNb].userFunction = NULL;
+  UserCallbacks[channelNb].userArguments = NULL;
+  return true;
+}
+
+
+bool FTM_StartTimer(const TFTMChannel* const aFTMChannel)
+{
+  uint8_t channelNb = aFTMChannel->channelNb;
+
+  // Number of clock periods to complete...
+  uint16_t delayCount = aFTMChannel->delayCount;
+
+  // Ensure the channel is correctly configured for supported functions...
+  // and valid channel parameters have been provided
+  if (!IsValidChannelNumber(channelNb) ||
+      CHANNEL_TIMER_FUNCTION(channelNb) != TIMER_FUNCTION_OUTPUT_COMPARE ||
+      delayCount == 0)
+  {
+      return false;
+  }
+
+  //Advance the compare/match value for the channel from current FTM0_CNT value
+  FTM0_CnV(channelNb) = FTM0_CNT + delayCount;
+
+  return true;
+}
+
+bool IsValidChannelNumber(const uint8_t channelNb)
+{
+  return channelNb >= 0 && channelNb <= 7;
+}
+
+void __attribute__ ((interrupt)) FTM0_ISR(void)
+{
+  OS_ISREnter();
+  uint8_t channelCount;
+
+  // Go through all 8 channels to check whether they have been configured to
+  // cause interrupts and whether their interrupt flag is infact set...
+  for (channelCount = 0; channelCount < FTM_CHANNELS_SIZE; channelCount++)
+  {
+    // Firstly, if interrupts enabled on channel
+    if (FTM0_CnSC(channelCount) & FTM_CnSC_CHIE_MASK)
+    {
+      // ...and flag set
+      if (FTM0_CnSC(channelCount) & FTM_CnSC_CHF_MASK)
+      {
+	// If channel has been set in the only supported output function
+	if (CHANNEL_TIMER_FUNCTION(channelCount) == TIMER_FUNCTION_OUTPUT_COMPARE)
+	{
+	  // Clear the interrupt flag
+	  FTM0_CnSC(channelCount) &= ~FTM_CnSC_CHF_MASK;
+
+	  //Disable further compare interrupts on channel
+	  FTM0_CnSC(channelCount) &= ~FTM_CnSC_CHIE_MASK;
+
+
+	  if (FTM_ChannelOutputEventSemaphores[channelCount])
+	  {
+	    OS_SemaphoreSignal(FTM_ChannelOutputEventSemaphores[channelCount]);
+	  }
+
+
+	  // Perform callback function after handling the interrupt (above)
+
+//	  if (UserCallbacks[channelCount].userFunction)
+//	  {
+//	      (*UserCallbacks[channelCount].userFunction)(UserCallbacks[channelCount].userArguments);
+//	  }
+
+	} else {
+	  // Channel was not configured to supported output function.
+	  // Unset the channel, which also clears the flag
+	  // ...May not ever get in this state with our current implementation...
+	  UnSetChannel(channelCount);
+	}
+      }
+    }
+  }
+  OS_ISRExit();
+}
+
+/*!
+** @}
+*/
